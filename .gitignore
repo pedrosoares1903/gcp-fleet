@@ -1,0 +1,21 @@
+# --- Terraform ---
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+.terraform/
+tfplan
+*.tfplan
+*.auto.tfvars
+override.tf
+override_*.tf
+
+# --- Ansible ---
+# Installed from requirements.yml; never committed.
+ansible/collections/
+# Vault passwords. The encrypted files ARE committed; the passwords never are.
+.vault-pass*
+*.retry
+
+# --- Python ---
+.venv/
+__pycache__/

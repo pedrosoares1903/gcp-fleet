@@ -1,0 +1,19 @@
+# Phase 2 exit test: every VM answers, through IAP, as the OS Login user,
+# and can become root.
+- name: Reach every VM
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: SSH works and Python is there
+      ansible.builtin.ping:
+
+    - name: Who am I, and can I become root
+      ansible.builtin.command: whoami
+      become: true
+      register: whoami
+      changed_when: false
+
+    - name: Show it
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ gcp_zone }}) -> {{ whoami.stdout }}"

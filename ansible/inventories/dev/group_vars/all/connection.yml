@@ -1,0 +1,22 @@
+# --- How Ansible reaches a VM that has no public IP --------------------------
+#
+# ssh does not connect to the VM. It runs the ProxyCommand and talks SSH over
+# that command's stdin/stdout. gcloud opens an IAP tunnel to port 22 of the VM
+# named %h (the inventory hostname, e.g. dev-web-01).
+#
+# `project` and `zone` are host variables the inventory plugin fills in from
+# the VM itself, so this line is the same for every host and every environment.
+ansible_ssh_common_args: >-
+  -o ProxyCommand="gcloud compute start-iap-tunnel %h 22
+  --listen-on-stdin --project={{ gcp_project }} --zone={{ gcp_zone }} --verbosity=warning"
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+
+# --- Who logs in -------------------------------------------------------------
+#
+# OS Login decides the Linux username from the Google identity:
+#   you      -> something like pedro19emanuel_gmail_com
+#   pipeline -> sa_<numeric id of the service account>
+# Neither is typed here. Each side exports its own before running Ansible.
+ansible_user: "{{ lookup('ansible.builtin.env', 'OSLOGIN_USER') | default(undef('OSLOGIN_USER is not set in this terminal. Export it first (gcloud compute os-login describe-profile)'), true) }}"
+ansible_ssh_private_key_file: "{{ lookup('ansible.builtin.env', 'OSLOGIN_KEY') | default('~/.ssh/google_compute_engine', true) }}"

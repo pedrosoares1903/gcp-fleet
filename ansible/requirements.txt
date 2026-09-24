@@ -1,0 +1,5 @@
+# The Python side of the toolbox. Installed into a virtualenv, never system-wide.
+ansible-core==2.19.13
+# The google.cloud inventory plugin runs on YOUR machine and needs these two.
+google-auth==2.58.0
+requests==2.34.2

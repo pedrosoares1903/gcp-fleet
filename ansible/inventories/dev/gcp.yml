@@ -1,0 +1,31 @@
+# Every variable the plugin copies from the VM gets this prefix. Without it, the
+# VM's `name` and `tags` land on Ansible's reserved names and every run warns.
+vars_prefix: gcp_
+
+# The inventory is not a list of machines. It is a QUESTION asked to GCP every
+# time Ansible starts: "which VMs have these labels right now?"
+plugin: google.cloud.gcp_compute
+
+projects:
+  - project-caadee7a-7323-444d-91a
+zones:
+  - europe-west1-b
+
+# Your gcloud login locally; the OIDC identity in the pipeline. No key file.
+auth_kind: application
+
+# Only this environment's machines, and only the ones Terraform manages.
+filters:
+  - labels.env = dev
+  - labels.managed_by = terraform
+
+# Call each host by its VM name (dev-web-01), not by an IP.
+hostnames:
+  - name
+
+# Labels -> groups.  env=dev -> env_dev   tier=web -> tier_web
+keyed_groups:
+  - key: labels.env
+    prefix: env
+  - key: labels.tier
+    prefix: tier

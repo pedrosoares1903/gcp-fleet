@@ -1,0 +1,3 @@
+# Variables for ONE machine: this file's name is the machine's name.
+# Anything here wins over group_vars and over the role's defaults.
+site_version: "v3"

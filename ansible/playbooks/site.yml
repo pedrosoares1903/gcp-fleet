@@ -1,8 +1,19 @@
 # The playbook that makes every VM look the way this repository says.
-# Each phase adds a role here; nothing else changes.
+# One play per kind of machine: each play picks its machines by group.
+
+# Every VM, whatever it is for.
 - name: Baseline for every VM
   hosts: all
   become: true
 
   roles:
     - common
+
+# Only the VMs Terraform labelled tier=web (the tier_web group).
+- name: Web servers
+  hosts: tier_web
+  become: true
+
+  roles:
+    - nginx          # the web server
+    - site           # the page it serves

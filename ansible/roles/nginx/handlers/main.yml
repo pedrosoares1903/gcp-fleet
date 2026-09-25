@@ -1,0 +1,5 @@
+# Runs at the end of the play, once, only if "Configure nginx" changed.
+- name: Reload nginx
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded                      # re-read the config; no request is dropped

@@ -1,0 +1,13 @@
+<!-- {{ ansible_managed }} -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ site_title }} - {{ inventory_hostname }}</title>
+</head>
+<body>
+  <h1>{{ site_title }}</h1>
+  <!-- One template, a different page on every VM: these values come from the VM itself. -->
+  <p id="served-by">{{ inventory_hostname }} | env={{ gcp_labels.env }} | {{ site_version }}</p>
+</body>
+</html>

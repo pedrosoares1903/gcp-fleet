@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# Step 4.1 - the web server
+# ---------------------------------------------------------------------------
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# ---------------------------------------------------------------------------
+# Step 4.4 - its configuration: same pattern as sshd in step 3.3/3.4
+# ---------------------------------------------------------------------------
+- name: Configure nginx
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nginx -t -c %s   # nginx tests the new file first (%s = temp copy)
+  notify: Reload nginx                   # if this task says "changed", run that handler

@@ -1,0 +1,6 @@
+# Handlers run at the END of the play, once, and only if a task notified them.
+# The name must match the `notify:` line exactly.
+- name: Reload ssh
+  ansible.builtin.service:
+    name: ssh                            # the service name on Debian
+    state: reloaded                      # re-read the config; open sessions stay up

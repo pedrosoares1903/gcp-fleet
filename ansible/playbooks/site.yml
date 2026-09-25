@@ -1,0 +1,8 @@
+# The playbook that makes every VM look the way this repository says.
+# Each phase adds a role here; nothing else changes.
+- name: Baseline for every VM
+  hosts: all
+  become: true
+
+  roles:
+    - common

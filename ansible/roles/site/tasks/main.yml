@@ -1,0 +1,10 @@
+# The page nginx serves. Debian's default site looks for index.html first,
+# so writing it here replaces the "Welcome to nginx!" page without touching
+# any nginx configuration.
+- name: Publish the home page
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: /var/www/html/index.html
+    owner: root
+    group: root
+    mode: "0644"

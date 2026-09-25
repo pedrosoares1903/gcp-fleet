@@ -1,0 +1,40 @@
+# {{ ansible_managed }}
+# Source: roles/nginx/templates/nginx.conf.j2 in gcp-fleet.
+# This role owns the WHOLE nginx configuration: Debian's default site is no
+# longer included, so what is below is everything nginx does.
+
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+error_log /var/log/nginx/error.log;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+    worker_connections 768;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log /var/log/nginx/access.log;
+    sendfile on;
+
+    # Do not tell every visitor which nginx version runs here.
+    server_tokens off;
+
+    server {
+        listen 80 default_server;
+        root /var/www/html;
+        index index.html;
+
+        # A page that answers "ok" and nothing else, for health checks.
+        location = /health {
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+}

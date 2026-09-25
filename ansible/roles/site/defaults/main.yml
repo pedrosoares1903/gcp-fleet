@@ -1,0 +1,3 @@
+# What the page says. Change site_version and run the playbook to "deploy".
+site_title: "gcp-fleet"
+site_version: "v2"

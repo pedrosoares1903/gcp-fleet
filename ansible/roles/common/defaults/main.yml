@@ -1,0 +1,11 @@
+# Packages every VM in the fleet gets.
+# defaults/ is the LOWEST precedence in Ansible: any group_vars or host_vars
+# file can replace this list without touching the role.
+common_packages:
+  - curl
+  - htop
+  - unattended-upgrades
+
+# Install security updates automatically, every day.
+# Turn it off for one machine with a host_vars file, not by editing the VM.
+common_auto_upgrades: true

@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# Source: roles/common/templates/50-hardening.conf.j2 in gcp-fleet.
+# Any change made by hand on this machine is undone on the next run.
+
+# Nobody logs in as root directly. You log in as yourself, then use sudo.
+PermitRootLogin no
+
+# Keys only. OS Login provides the key; a password is never accepted.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+
+# No graphical windows over SSH: these are servers, not desktops.
+X11Forwarding no
+
+# Three wrong keys and the connection is closed.
+MaxAuthTries 3

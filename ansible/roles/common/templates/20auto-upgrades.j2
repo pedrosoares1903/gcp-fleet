@@ -1,0 +1,9 @@
+// {{ ansible_managed }}
+// Source: roles/common/templates/20auto-upgrades.j2 in gcp-fleet.
+// Any change made by hand on this machine is undone on the next run.
+
+// Refresh the package lists once a day.
+APT::Periodic::Update-Package-Lists "{{ '1' if common_auto_upgrades else '0' }}";
+
+// Install security updates once a day, unattended.
+APT::Periodic::Unattended-Upgrade "{{ '1' if common_auto_upgrades else '0' }}";

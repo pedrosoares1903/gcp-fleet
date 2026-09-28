@@ -1,10 +1,52 @@
-# The page nginx serves. Debian's default site looks for index.html first,
-# so writing it here replaces the "Welcome to nginx!" page without touching
-# any nginx configuration.
+# ---------------------------------------------------------------------------
+# Step 4.2 - the home page
+# ---------------------------------------------------------------------------
+# Debian's default site looks for index.html first, so writing it here
+# replaces the "Welcome to nginx!" page without touching nginx itself.
 - name: Publish the home page
   ansible.builtin.template:
     src: index.html.j2
     dest: /var/www/html/index.html
+    owner: root
+    group: root
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# Step 5.2 - the /admin password, from the vault to the VM, as a hash only
+# ---------------------------------------------------------------------------
+# The htpasswd module runs ON the VM and needs this Python library there.
+- name: Install the library the htpasswd module needs
+  ansible.builtin.apt:
+    name: python3-passlib
+    state: present
+
+# Stores "admin:<hash>". The password itself is never written to the VM,
+# and the module hides it from Ansible's output on its own.
+- name: Store the admin password (hashed)
+  community.general.htpasswd:
+    path: /etc/nginx/.htpasswd
+    name: admin
+    password: "{{ site_admin_password }}"   # from group_vars/all/vault.yml (encrypted)
+    owner: root
+    group: www-data                          # nginx runs as www-data and must read it
+    mode: "0640"                             # nobody else can
+
+# ---------------------------------------------------------------------------
+# Step 5.3 - the page behind the password
+# ---------------------------------------------------------------------------
+# template does not create folders, so the folder comes first.
+- name: Create the admin folder
+  ansible.builtin.file:
+    path: /var/www/html/admin
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Publish the admin page
+  ansible.builtin.template:
+    src: admin.html.j2
+    dest: /var/www/html/admin/index.html
     owner: root
     group: root
     mode: "0644"

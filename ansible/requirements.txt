@@ -1,5 +1,8 @@
 # The Python side of the toolbox. Installed into a virtualenv, never system-wide.
-ansible-core==2.19.13
+# 2.19 stops at Python 3.13; the WSL runs 3.14. 2.21 is the current line that supports it.
+ansible-core==2.21.4
 # The google.cloud inventory plugin runs on YOUR machine and needs these two.
 google-auth==2.58.0
 requests==2.34.2
+# Checks playbooks and roles for mistakes. Same version locally and in CI.
+ansible-lint==26.9.0

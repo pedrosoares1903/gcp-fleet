@@ -1,0 +1,4 @@
+---
+- name: Rolling update playbook
+  hosts: all
+  tasks: []

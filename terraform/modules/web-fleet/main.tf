@@ -18,6 +18,7 @@ locals {
 # ---------------------------------------------------------------------------
 
 resource "google_compute_instance" "web" {
+  # checkov:skip=CKV_GCP_38:Customer-supplied keys would have to be provided on every VM start. The disks are encrypted at rest by Google-managed keys, and they hold nothing Ansible cannot rebuild.
   for_each = local.web_names
 
   project      = var.project_id

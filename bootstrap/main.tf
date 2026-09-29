@@ -34,6 +34,7 @@ resource "google_project_service" "required" {
 # ---------------------------------------------------------------------------
 
 resource "google_storage_bucket" "state" {
+  # checkov:skip=CKV_GCP_62:Access logs would need a second bucket, which would itself need access logs. The state bucket is readable only by fleet-terraform and the project owner.
   name     = var.state_bucket_name
   project  = var.project_id
   location = var.region
@@ -79,6 +80,7 @@ locals {
 }
 
 resource "google_iam_workload_identity_pool_provider" "fleet" {
+  # checkov:skip=CKV_GCP_125:The rule wants assertion.sub pinned to one value, which would allow a single git ref and reject pull-request runs. The condition below pins owner AND repository, which is the scope that matters here.
   project                            = var.project_id
   workload_identity_pool_id          = var.workload_identity_pool_id
   workload_identity_pool_provider_id = "fleet-gcp"

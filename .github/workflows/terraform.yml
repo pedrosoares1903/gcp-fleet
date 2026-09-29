@@ -1,0 +1,197 @@
+name: Terraform
+
+on:
+  # No `paths:` filter on purpose. These jobs are required checks, and a
+  # required check that never runs leaves the PR waiting forever.
+  pull_request:
+  push:
+    branches: [main]
+  # Re-apply main on demand, without inventing a commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Must be the exact version `terraform version` prints on the laptop that
+  # wrote the state. HashiCorp does not guarantee that an older 1.x can read
+  # a state written by a newer 1.x, so laptop and pipeline stay on the same one.
+  TERRAFORM_VERSION: "1.16.4"
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      # -backend=false: syntax and references only. No credentials needed,
+      # and none are given to this job.
+      - name: Validate every configuration
+        run: |
+          for dir in bootstrap terraform/modules/web-fleet terraform/environments/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Pinned: a scanner that updates itself turns the pipeline red on a
+      # morning when nobody changed anything.
+      - name: Install checkov
+        run: pip install checkov==3.3.17
+
+      # Every finding is either fixed or skipped in the code, with the reason
+      # written next to it (# checkov:skip=...).
+      - name: Scan
+        run: checkov --directory . --framework terraform --compact --quiet
+
+  plan:
+    name: Plan (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [validate, security]
+
+    permissions:
+      contents: read
+      id-token: write        # to ask GitHub for the OIDC token
+      pull-requests: write   # to post the plan as a PR comment
+
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev]   # prod joins in phase 7
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC -> Workload Identity Federation -> fleet-terraform. No key anywhere.
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.TF_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform -chdir=terraform/environments/${{ matrix.environment }} init -input=false
+
+      - name: Plan
+        run: |
+          terraform -chdir=terraform/environments/${{ matrix.environment }} \
+            plan -input=false -lock-timeout=5m -out=tfplan
+          terraform -chdir=terraform/environments/${{ matrix.environment }} \
+            show -no-color tfplan > plan.txt
+
+      - name: Comment the plan on the pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan.txt', 'utf8');
+            const body = [
+              '### Terraform plan — `${{ matrix.environment }}`',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```terraform',
+              plan.length > 60000 ? plan.slice(0, 60000) + '\n... truncated' : plan,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Upload the plan
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.sha }}
+          path: terraform/environments/${{ matrix.environment }}/tfplan
+          retention-days: 5
+
+  apply:
+    name: Apply (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: plan
+
+    # A pull request never changes anything. A manual run applies only from main.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      max-parallel: 1
+      matrix:
+        environment: [dev]
+
+    environment: ${{ matrix.environment }}
+
+    concurrency:
+      group: terraform-apply-${{ matrix.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.TF_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.sha }}
+          path: terraform/environments/${{ matrix.environment }}
+
+      - name: Init
+        run: terraform -chdir=terraform/environments/${{ matrix.environment }} init -input=false
+
+      # The saved plan, not a new one. If the state moved since, Terraform refuses.
+      - name: Apply
+        run: |
+          terraform -chdir=terraform/environments/${{ matrix.environment }} \
+            apply -input=false -lock-timeout=5m tfplan

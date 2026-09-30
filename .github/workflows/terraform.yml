@@ -16,7 +16,7 @@ env:
   # Must be the exact version `terraform version` prints on the laptop that
   # wrote the state. HashiCorp does not guarantee that an older 1.x can read
   # a state written by a newer 1.x, so laptop and pipeline stay on the same one.
-  TERRAFORM_VERSION: "1.16.4"
+  TERRAFORM_VERSION: "1.13.3"
 
 jobs:
   validate:
@@ -80,9 +80,9 @@ jobs:
       pull-requests: write   # to post the plan as a PR comment
 
     strategy:
-      fail-fast: false
+      fail-fast: false       # a broken prod plan still shows the dev plan
       matrix:
-        environment: [dev]   # prod joins in phase 7
+        environment: [dev, prod]
 
     steps:
       - uses: actions/checkout@v4
@@ -157,11 +157,16 @@ jobs:
       contents: read
       id-token: write
 
+    # One environment at a time, in this order: dev first, then prod.
+    # fail-fast: if dev fails, prod is cancelled and never touched.
     strategy:
       max-parallel: 1
+      fail-fast: true
       matrix:
-        environment: [dev]
+        environment: [dev, prod]
 
+    # The GitHub environment. `prod` has a required reviewer: the job waits
+    # for someone to press "Approve" before any step below runs.
     environment: ${{ matrix.environment }}
 
     concurrency:

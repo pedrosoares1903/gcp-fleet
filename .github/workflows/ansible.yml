@@ -51,7 +51,7 @@ jobs:
     # A dry run of site.yml against the real VMs, with the diff posted on the PR.
     name: Check (${{ matrix.environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     needs: lint
     if: github.event_name == 'pull_request'
 
@@ -140,7 +140,7 @@ jobs:
           ENVIRONMENT: ${{ matrix.environment }}
         run: |
           set -o pipefail
-          ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --check --diff \
+          ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --check --diff -vvv \
             2>&1 | tee "$RUNNER_TEMP/check.txt"
 
       # Runs even when the check failed: a red check with no explanation

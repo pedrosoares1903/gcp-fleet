@@ -6,11 +6,17 @@
 #
 # `project` and `zone` are host variables the inventory plugin fills in from
 # the VM itself, so this line is the same for every host and every environment.
+
+# ServerAlive*: ssh pings the VM every 15 s through the tunnel. After 4 pings
+# with no answer (one minute), it gives up with an error instead of waiting
+# forever on a tunnel that stopped moving.
 ansible_ssh_common_args: >-
   -o ProxyCommand="gcloud compute start-iap-tunnel %h 22
   --listen-on-stdin --project={{ gcp_project }} --zone={{ gcp_zone }} --verbosity=warning"
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=4
 
 # --- Who logs in -------------------------------------------------------------
 #

@@ -5,13 +5,14 @@ on:
   push:
     branches: [main]
 
-# Least privilege: this workflow only reads the repository.
+# Least privilege: by default, jobs only read the repository.
+# The check job asks for more, for itself only.
 permissions:
   contents: read
 
 jobs:
   lint:
-    # This exact name is what the branch ruleset will require (step 6.2).
+    # This exact name is what the branch ruleset requires (step 6.2).
     name: Ansible lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -45,3 +46,147 @@ jobs:
       # files that are not ours to lint.
       - name: Lint
         run: ansible-lint playbooks/ roles/
+
+  check:
+    # A dry run of site.yml against the real VMs, with the diff posted on the PR.
+    name: Check (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint
+    if: github.event_name == 'pull_request'
+
+    permissions:
+      contents: read
+      id-token: write        # to ask GitHub for the OIDC token
+      pull-requests: write   # to post the result as a PR comment
+
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev]   # prod joins in phase 7
+
+    defaults:
+      run:
+        working-directory: ansible
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Ansible
+        run: pip install -r requirements.txt
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      # OIDC -> Workload Identity Federation -> fleet-ansible. No key anywhere.
+      # The inventory plugin (auth_kind: application) picks this identity up.
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.ANSIBLE_SERVICE_ACCOUNT }}
+
+      # gcloud opens the IAP tunnel (ProxyCommand) and manages the SSH key.
+      - uses: google-github-actions/setup-gcloud@v3
+
+      # A stopped VM would only show up later as "UNREACHABLE", after a
+      # 30-second timeout per host. Say it plainly, before anything else.
+      - name: The VMs must be running
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          not_running=$(gcloud compute instances list \
+            --filter="labels.env=${ENVIRONMENT} AND labels.managed_by=terraform AND status!=RUNNING" \
+            --format="value(name)")
+          if [ -n "$not_running" ]; then
+            echo "::error::Not running: $(echo $not_running). Start them, then re-run this job."
+            exit 1
+          fi
+
+      # A brand-new key for this run only. OS Login forgets it after one hour,
+      # and the last step removes it even sooner. Nothing is stored anywhere.
+      - name: One-hour SSH key
+        run: |
+          ssh-keygen -t ed25519 -N "" -q -C "github-run-${GITHUB_RUN_ID}" -f "$RUNNER_TEMP/oslogin"
+          gcloud compute os-login ssh-keys add --key-file="$RUNNER_TEMP/oslogin.pub" --ttl=1h > /dev/null
+          user=$(gcloud compute os-login describe-profile --format='value(posixAccounts[0].username)')
+          # group_vars/all/connection.yml reads these two variables.
+          echo "OSLOGIN_USER=$user" >> "$GITHUB_ENV"
+          echo "OSLOGIN_KEY=$RUNNER_TEMP/oslogin" >> "$GITHUB_ENV"
+
+      # The real password this time: --check still decrypts the vault to
+      # compare the /admin password with the one on the VM.
+      # Secret names are case-insensitive: VAULT_PASSWORD_dev finds VAULT_PASSWORD_DEV.
+      - name: Vault password
+        env:
+          VAULT_PASSWORD: ${{ secrets[format('VAULT_PASSWORD_{0}', matrix.environment)] }}
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          if [ -z "$VAULT_PASSWORD" ]; then
+            echo "::error::The repository secret VAULT_PASSWORD_${ENVIRONMENT^^} is missing."
+            exit 1
+          fi
+          printf '%s\n' "$VAULT_PASSWORD" > ".vault-pass-${ENVIRONMENT}"
+          chmod 600 ".vault-pass-${ENVIRONMENT}"
+
+      # --check: change nothing, only report what WOULD change.
+      # --diff:  and show the lines that would change, file by file.
+      - name: Check
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          set -o pipefail
+          ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --check --diff -vvv \
+            2>&1 | tee "$RUNNER_TEMP/check.txt"
+
+      # Runs even when the check failed: a red check with no explanation
+      # on the PR is the least useful thing a pipeline can do.
+      - name: Comment the result on the pull request
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          OUTCOME: ${{ job.status }}
+        with:
+          script: |
+            const fs = require('fs');
+            const file = `${process.env.RUNNER_TEMP}/check.txt`;
+            // No file = the job stopped before the check (e.g. VMs stopped).
+            // The red step in the job already says why.
+            if (!fs.existsSync(file)) return;
+            const out = fs.readFileSync(file, 'utf8');
+            const at = out.lastIndexOf('PLAY RECAP');
+            const recap = at >= 0 ? out.slice(at) : 'No PLAY RECAP: the run stopped early. See the full output.';
+            const body = [
+              `### Ansible check — \`${process.env.ENVIRONMENT}\` (${process.env.OUTCOME})`,
+              '',
+              '```',
+              recap.trim(),
+              '```',
+              '',
+              '<details><summary>Show the full dry run (--check --diff)</summary>',
+              '',
+              '```diff',
+              out.length > 60000 ? out.slice(-60000) : out,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      # The key would expire in an hour anyway. Removing it now leaves nothing.
+      - name: Remove the SSH key
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/oslogin.pub" ]; then
+            gcloud compute os-login ssh-keys remove --key-file="$RUNNER_TEMP/oslogin.pub"
+          fi

@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Re-apply main on demand, e.g. after someone changed a VM by hand.
+  workflow_dispatch:
 
 # Least privilege: by default, jobs only read the repository.
 # The check job asks for more, for itself only.
@@ -51,7 +53,7 @@ jobs:
     # A dry run of site.yml against the real VMs, with the diff posted on the PR.
     name: Check (${{ matrix.environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     needs: lint
     if: github.event_name == 'pull_request'
 
@@ -136,11 +138,14 @@ jobs:
       # --check: change nothing, only report what WOULD change.
       # --diff:  and show the lines that would change, file by file.
       - name: Check
+        # A normal run takes a few minutes. Past 10, something is stuck: stop
+        # this step, and let the comment and key-removal steps still run.
+        timeout-minutes: 10
         env:
           ENVIRONMENT: ${{ matrix.environment }}
         run: |
           set -o pipefail
-          ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --check --diff -vvv \
+          ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --check --diff \
             2>&1 | tee "$RUNNER_TEMP/check.txt"
 
       # Runs even when the check failed: a red check with no explanation
@@ -184,6 +189,105 @@ jobs:
             });
 
       # The key would expire in an hour anyway. Removing it now leaves nothing.
+      - name: Remove the SSH key
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/oslogin.pub" ]; then
+            gcloud compute os-login ssh-keys remove --key-file="$RUNNER_TEMP/oslogin.pub"
+          fi
+
+  apply:
+    # Makes the VMs match main. Runs after every merge, never on a pull request.
+    name: Apply (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: lint
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      max-parallel: 1
+      matrix:
+        environment: [dev]   # prod joins in phase 7
+
+    # Shows up under the repository's Environments and Deployments.
+    environment: ${{ matrix.environment }}
+
+    # Two merges in a row: the second apply waits for the first to finish.
+    concurrency:
+      group: ansible-apply-${{ matrix.environment }}
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: ansible
+
+    # From here to "Vault password", the same steps as the check job.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Ansible
+        run: pip install -r requirements.txt
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.ANSIBLE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: The VMs must be running
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          not_running=$(gcloud compute instances list \
+            --filter="labels.env=${ENVIRONMENT} AND labels.managed_by=terraform AND status!=RUNNING" \
+            --format="value(name)")
+          if [ -n "$not_running" ]; then
+            echo "::error::Not running: $(echo $not_running). Start them, then re-run this job."
+            exit 1
+          fi
+
+      - name: One-hour SSH key
+        run: |
+          ssh-keygen -t ed25519 -N "" -q -C "github-run-${GITHUB_RUN_ID}" -f "$RUNNER_TEMP/oslogin"
+          gcloud compute os-login ssh-keys add --key-file="$RUNNER_TEMP/oslogin.pub" --ttl=1h > /dev/null
+          user=$(gcloud compute os-login describe-profile --format='value(posixAccounts[0].username)')
+          echo "OSLOGIN_USER=$user" >> "$GITHUB_ENV"
+          echo "OSLOGIN_KEY=$RUNNER_TEMP/oslogin" >> "$GITHUB_ENV"
+
+      - name: Vault password
+        env:
+          VAULT_PASSWORD: ${{ secrets[format('VAULT_PASSWORD_{0}', matrix.environment)] }}
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          if [ -z "$VAULT_PASSWORD" ]; then
+            echo "::error::The repository secret VAULT_PASSWORD_${ENVIRONMENT^^} is missing."
+            exit 1
+          fi
+          printf '%s\n' "$VAULT_PASSWORD" > ".vault-pass-${ENVIRONMENT}"
+          chmod 600 ".vault-pass-${ENVIRONMENT}"
+
+      # The real run. No --check: this one changes the VMs.
+      # --diff stays, so the log shows exactly what was changed.
+      - name: Apply
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --diff
+
       - name: Remove the SSH key
         if: always()
         run: |

@@ -50,7 +50,7 @@ jobs:
         run: ansible-lint playbooks/ roles/
 
   check:
-    # A dry run of site.yml against the real VMs, with the diff posted on the PR.
+    # A dry run against the real VMs, with the diff posted on the PR.
     name: Check (${{ matrix.environment }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -62,10 +62,19 @@ jobs:
       id-token: write        # to ask GitHub for the OIDC token
       pull-requests: write   # to post the result as a PR comment
 
+    # Each environment is rehearsed with the playbook that will apply to it.
     strategy:
       fail-fast: false
       matrix:
-        environment: [dev]   # prod joins in phase 7
+        include:
+          - environment: dev
+            playbook: site.yml
+          - environment: prod
+            playbook: rolling.yml
+
+    # Each environment opens only its own vault (see the apply job).
+    env:
+      ANSIBLE_VAULT_IDENTITY_LIST: ${{ matrix.environment }}@.vault-pass-${{ matrix.environment }}
 
     defaults:
       run:
@@ -143,9 +152,10 @@ jobs:
         timeout-minutes: 10
         env:
           ENVIRONMENT: ${{ matrix.environment }}
+          PLAYBOOK: ${{ matrix.playbook }}
         run: |
           set -o pipefail
-          ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --check --diff \
+          ansible-playbook -i "inventories/${ENVIRONMENT}" "playbooks/${PLAYBOOK}" --check --diff \
             2>&1 | tee "$RUNNER_TEMP/check.txt"
 
       # Runs even when the check failed: a red check with no explanation
@@ -216,7 +226,11 @@ jobs:
       max-parallel: 1
       fail-fast: true
       matrix:
-        environment: [dev, prod]
+        include:
+          - environment: dev
+            playbook: site.yml       # every VM at once: fast, and it is dev
+          - environment: prod
+            playbook: rolling.yml    # one VM at a time, each one checked
 
     # `prod` has a required reviewer: the job waits for "Approve" before
     # any step below runs.
@@ -295,7 +309,8 @@ jobs:
       - name: Apply
         env:
           ENVIRONMENT: ${{ matrix.environment }}
-        run: ansible-playbook -i "inventories/${ENVIRONMENT}" playbooks/site.yml --diff
+          PLAYBOOK: ${{ matrix.playbook }}
+        run: ansible-playbook -i "inventories/${ENVIRONMENT}" "playbooks/${PLAYBOOK}" --diff
 
       - name: Remove the SSH key
         if: always()

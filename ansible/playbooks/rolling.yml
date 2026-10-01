@@ -1,4 +1,28 @@
----
-- name: Rolling update playbook
-  hosts: all
-  tasks: []
+# The same three roles as site.yml, for the VMs that serve the site, but
+# ONE VM AT A TIME. A VM only counts as done when it serves the new page.
+# If one VM fails, the run stops there: the next VM is never touched.
+- name: Rolling update of the web servers
+  hosts: tier_web
+  become: true
+
+  # How many VMs per round. 1 = finish one VM completely before starting the next.
+  serial: 1
+  # How many VMs of a round may fail before the whole run stops. 0 = not even one.
+  max_fail_percentage: 0
+
+  roles:
+    - common
+    - nginx
+    - site
+
+  # post_tasks run after the roles AND after their handlers: by now nginx has
+  # already been reloaded on this VM.
+  post_tasks:
+    - name: Wait until this VM serves the new version
+      ansible.builtin.uri:
+        url: http://localhost/
+        return_content: true
+      register: page
+      until: page.status == 200 and ('| ' ~ site_version ~ '</p>') in page.content
+      retries: 5
+      delay: 3

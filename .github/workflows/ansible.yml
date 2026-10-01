@@ -210,13 +210,22 @@ jobs:
       contents: read
       id-token: write
 
+    # One environment at a time, in this order: dev first, then prod.
+    # fail-fast: if dev fails, prod is cancelled and never touched.
     strategy:
       max-parallel: 1
+      fail-fast: true
       matrix:
-        environment: [dev]   # prod joins in phase 7
+        environment: [dev, prod]
 
-    # Shows up under the repository's Environments and Deployments.
+    # `prod` has a required reviewer: the job waits for "Approve" before
+    # any step below runs.
     environment: ${{ matrix.environment }}
+
+    # Each environment opens only its own vault. ansible.cfg says dev; this
+    # replaces it with the vault of the environment this job is for.
+    env:
+      ANSIBLE_VAULT_IDENTITY_LIST: ${{ matrix.environment }}@.vault-pass-${{ matrix.environment }}
 
     # Two merges in a row: the second apply waits for the first to finish.
     concurrency:

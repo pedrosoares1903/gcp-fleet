@@ -1,0 +1,70 @@
+name: Power
+
+on:
+  # Every evening at 20:07 UTC, after the drift check (19:17) has had its look:
+  # stop every VM that was left running. The safety net for the bill.
+  schedule:
+    - cron: "7 20 * * *"
+  # And by hand: Actions -> Power -> Run workflow, to start or stop on demand.
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "start or stop"
+        type: choice
+        options: [stop, start]
+        default: stop
+      environment:
+        description: "which VMs"
+        type: choice
+        options: [all, dev, prod]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  power:
+    # A scheduled run has no inputs: `||` falls back to the nightly defaults.
+    name: Power (${{ inputs.action || 'stop' }} ${{ inputs.environment || 'all' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      id-token: write   # to ask GitHub for the OIDC token
+
+    steps:
+      # fleet-ansible: it can list VMs (compute.viewer) and, through the
+      # custom role fleetPower, start and stop them. It cannot delete them.
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.ANSIBLE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Start or stop
+        env:
+          ACTION: ${{ inputs.action || 'stop' }}
+          TARGET: ${{ inputs.environment || 'all' }}
+        run: |
+          # Only VMs this repository manages, only in the state that needs the action.
+          filter="labels.managed_by=terraform"
+          if [ "$TARGET" != "all" ]; then filter="$filter AND labels.env=$TARGET"; fi
+          if [ "$ACTION" = "stop" ]; then
+            filter="$filter AND status=RUNNING"
+          else
+            filter="$filter AND status=TERMINATED"   # GCE's name for "stopped"
+          fi
+
+          vms=$(gcloud compute instances list --filter="$filter" --format="value(name,zone.basename())")
+          if [ -z "$vms" ]; then
+            echo "Nothing to $ACTION."
+            exit 0
+          fi
+
+          while read -r name zone; do
+            echo "$ACTION $name ($zone)"
+            gcloud compute instances "$ACTION" "$name" --zone="$zone" --quiet
+          done <<< "$vms"

@@ -1,0 +1,11 @@
+# The page check that both playbooks run after the roles and their handlers.
+# One file, imported by site.yml and rolling.yml: dev and prod can never end
+# up checking different things.
+- name: Wait until this VM serves the new version
+  ansible.builtin.uri:
+    url: http://localhost/
+    return_content: true
+  register: page
+  until: page.status == 200 and ('| ' ~ site_version ~ '</p>') in page.content
+  retries: 5
+  delay: 3

@@ -17,3 +17,9 @@
   roles:
     - nginx          # the web server
     - site           # the page it serves
+
+  # The same check as rolling.yml. Here both VMs change at once, so this does
+  # not protect dev; it makes a broken dev turn the pipeline red.
+  post_tasks:
+    - name: Check the page
+      ansible.builtin.import_tasks: tasks/verify-page.yml

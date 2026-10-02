@@ -1,0 +1,168 @@
+name: Config drift
+
+on:
+  # Every day at 19:17 UTC: late enough to catch a day of hands-on changes,
+  # before the VMs are stopped for the night (step 8.3). Not on the hour:
+  # GitHub starts scheduled runs late when everyone asks for :00.
+  schedule:
+    - cron: "17 19 * * *"
+  # And on demand: Actions -> Config drift -> Run workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Drift (dev)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+      id-token: write   # to ask GitHub for the OIDC token
+      issues: write     # to open, comment on, and close the drift issue
+
+    env:
+      ANSIBLE_VAULT_IDENTITY_LIST: dev@.vault-pass-dev
+      ISSUE_TITLE: "Config drift in dev"
+
+    defaults:
+      run:
+        working-directory: ansible
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Ansible
+        run: pip install -r requirements.txt
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.ANSIBLE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      # Unlike the PR check, stopped VMs are normal here: on a day nobody
+      # worked, there is nothing to compare. That is a pass, not an error.
+      - name: Is any dev VM running?
+        id: vms
+        run: |
+          running=$(gcloud compute instances list \
+            --filter="labels.env=dev AND labels.managed_by=terraform AND status=RUNNING" \
+            --format="value(name)")
+          if [ -z "$running" ]; then
+            echo "::notice::No dev VM is running today: nothing to compare."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: One-hour SSH key
+        if: steps.vms.outputs.skip != 'true'
+        run: |
+          ssh-keygen -t ed25519 -N "" -q -C "github-run-${GITHUB_RUN_ID}" -f "$RUNNER_TEMP/oslogin"
+          gcloud compute os-login ssh-keys add --key-file="$RUNNER_TEMP/oslogin.pub" --ttl=1h > /dev/null
+          user=$(gcloud compute os-login describe-profile --format='value(posixAccounts[0].username)')
+          echo "OSLOGIN_USER=$user" >> "$GITHUB_ENV"
+          echo "OSLOGIN_KEY=$RUNNER_TEMP/oslogin" >> "$GITHUB_ENV"
+
+      - name: Vault password
+        if: steps.vms.outputs.skip != 'true'
+        env:
+          VAULT_PASSWORD: ${{ secrets.VAULT_PASSWORD_DEV }}
+        run: |
+          printf '%s\n' "$VAULT_PASSWORD" > .vault-pass-dev
+          chmod 600 .vault-pass-dev
+
+      # The same rehearsal as the PR check, against main. On a VM nobody
+      # touched, every task says ok. Any "changed" means the VM no longer
+      # matches main: someone changed it by hand.
+      - name: Compare the VMs with main
+        id: compare
+        if: steps.vms.outputs.skip != 'true'
+        run: |
+          set -o pipefail
+          ansible-playbook -i inventories/dev playbooks/site.yml --check --diff \
+            2>&1 | tee "$RUNNER_TEMP/drift.txt"
+          if grep -qE 'changed=[1-9]' "$RUNNER_TEMP/drift.txt"; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # One open issue at most: a new drift is added to it as a comment.
+      # When a later run finds no drift, the issue is closed.
+      - name: Open, update or close the drift issue
+        if: steps.compare.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          DRIFT: ${{ steps.compare.outputs.drift }}
+        with:
+          script: |
+            const fs = require('fs');
+            const title = process.env.ISSUE_TITLE;
+            const drift = process.env.DRIFT === 'true';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const open = (await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            })).data.find(i => i.title === title && !i.pull_request);
+
+            if (!drift) {
+              if (open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: open.number,
+                  body: `No drift any more: every VM matches main again. [Run](${run})`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: open.number, state: 'closed',
+                });
+              }
+              return;
+            }
+
+            const out = fs.readFileSync(`${process.env.RUNNER_TEMP}/drift.txt`, 'utf8');
+            const recap = out.slice(out.lastIndexOf('PLAY RECAP')).trim();
+            const body = [
+              `A VM in dev no longer matches \`main\`. Someone changed it by hand. [Run](${run})`,
+              '',
+              '```', recap, '```',
+              '',
+              'To put it back: Actions -> Ansible -> Run workflow (branch main).',
+              'To keep the change instead: make it in the repository, through a pull request.',
+              '',
+              '<details><summary>What would change back (--check --diff)</summary>',
+              '',
+              '```diff', out.length > 60000 ? out.slice(-60000) : out, '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            if (open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: open.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body,
+              });
+            }
+
+      # The issue says what; the red run makes sure someone looks.
+      - name: Fail when there is drift
+        if: steps.compare.outputs.drift == 'true'
+        run: |
+          echo "::error::dev no longer matches main. See the '${ISSUE_TITLE}' issue."
+          exit 1
+
+      - name: Remove the SSH key
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/oslogin.pub" ]; then
+            gcloud compute os-login ssh-keys remove --key-file="$RUNNER_TEMP/oslogin.pub"
+          fi

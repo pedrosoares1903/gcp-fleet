@@ -18,11 +18,5 @@
   # post_tasks run after the roles AND after their handlers: by now nginx has
   # already been reloaded on this VM.
   post_tasks:
-    - name: Wait until this VM serves the new version
-      ansible.builtin.uri:
-        url: http://localhost/
-        return_content: true
-      register: page
-      until: page.status == 200 and ('| ' ~ site_version ~ '</p>') in page.content
-      retries: 5
-      delay: 3
+    - name: Check the page
+      ansible.builtin.import_tasks: tasks/verify-page.yml

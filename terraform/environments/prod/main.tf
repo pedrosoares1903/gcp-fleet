@@ -10,7 +10,7 @@ module "web_fleet" {
   network    = "prod-baseline-vpc"
   subnetwork = "prod-baseline-apps"
 
-  web_count          = 2
+  web_count          = 0
   vm_service_account = var.vm_service_account
 }
 

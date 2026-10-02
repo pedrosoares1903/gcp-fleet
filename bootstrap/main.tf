@@ -143,6 +143,29 @@ resource "google_project_iam_member" "ansible" {
   member  = "serviceAccount:${google_service_account.ansible.email}"
 }
 
+# --- Power: start and stop, and nothing else ----------------------------------
+# The nightly power workflow (phase 8) runs as fleet-ansible. compute.instanceAdmin.v1
+# could start and stop VMs too, but it can also delete them. This custom role
+# holds exactly the two permissions that workflow needs.
+
+resource "google_project_iam_custom_role" "power" {
+  project     = var.project_id
+  role_id     = "fleetPower"
+  title       = "Fleet - start and stop VMs"
+  description = "Start and stop Compute Engine VMs. Cannot create, change or delete them."
+  permissions = [
+    "compute.instances.start",
+    "compute.instances.stop",
+  ]
+}
+
+resource "google_project_iam_member" "ansible_power" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.power.id
+  member  = "serviceAccount:${google_service_account.ansible.email}"
+}
+
+
 # --- Both pipelines need to "act as" the VM identity --------------------------
 # Terraform, to attach it to a VM it creates. Ansible, because OS Login refuses
 # a login to a VM that runs as a service account the caller cannot act as.

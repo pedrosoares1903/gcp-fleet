@@ -9,7 +9,7 @@ module "web_fleet" {
   network    = "dev-baseline-vpc"
   subnetwork = "dev-baseline-apps"
 
-  web_count          = 2
+  web_count          = 0
   vm_service_account = var.vm_service_account
 }
 

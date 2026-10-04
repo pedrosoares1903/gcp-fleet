@@ -1,0 +1,32 @@
+# Checks that run on YOUR machine, on the files of every commit, before the
+# commit is made. Install once per clone:  pre-commit install
+# The pipeline still runs its own checks: this only catches mistakes earlier.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # Refuses a commit that contains a private key. The repository is public.
+      - id: detect-private-key
+      # Every file ends with exactly one newline (see the 7 "changed" of PR #11).
+      - id: end-of-file-fixer
+      # No spaces at the end of lines: they show up as noise in every diff.
+      - id: trailing-whitespace
+      # Nothing over 500 KB by accident (a .zip, a binary, a state file).
+      - id: check-added-large-files
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.2
+    hooks:
+      # Runs terraform fmt on the .tf files of the commit, like the Validate job.
+      - id: terraform_fmt
+
+  # ansible-lint from YOUR .venv: the same version the pipeline uses
+  # (requirements.txt), with the same ansible.cfg, from inside ansible/.
+  - repo: local
+    hooks:
+      - id: ansible-lint
+        name: ansible-lint
+        entry: bash -c 'cd ansible && ansible-lint playbooks/ roles/'
+        language: system
+        files: ^ansible/
+        pass_filenames: false
